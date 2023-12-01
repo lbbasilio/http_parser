@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "http_parser.h"
+#include "cup/strutils/strutils.h"
 
 #define HTTP_SUCCESS				0x0
 #define HTTP_EMPTY_TOKEN			0x1
@@ -16,6 +17,11 @@
 #define HTTP_TARGET_TOO_LONG		0x8
 #define HTTP_END_OF_CONTENT			0x9
 #define HTTP_VERSION_EXPECTED		0xA
+#define HTTP_HEADER_EXPECTED		0xB
+#define HTTP_COLON_EXPECTED			0xC
+#define HTTP_INVALID_HEADER_BYTE	0xD
+#define HTTP_HEADER_VALUE_EXPECTED	0xE
+#define HTTP_INVALID_BODY_LENGTH	0XF
 
 static char* error_strs[] = 
 {
@@ -30,6 +36,10 @@ static char* error_strs[] =
 	"Target URI too long (>255)",
 	"Request content ended unexpectedly",
 	"HTTP Version expected",
+	"HTTP Header expected",
+	"Colon expected",
+	"Invalid byte in header value",
+	"Invalid body length (Content-Length header)"
 };
 
 static uint8_t last_parser_error = HTTP_SUCCESS;
@@ -71,6 +81,16 @@ static uint8_t http_is_uri_char(const char c)
 {
 	const char uri_chars[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._:/?#[]@!$&'()*+,;%=";
 	return strchr(uri_chars, c) != NULL;
+}
+
+static uint8_t http_is_vchar(const char c)
+{ 
+	return 0x20 < c && c < 0x7F;
+}
+
+static uint8_t http_is_obs_data(const char c)
+{
+	return c >= 0x80;	
 }
 
 static char* http_parse_token(char* start, char** tok, size_t* len) 
@@ -176,16 +196,16 @@ PARSE_VERSION_ERROR:
 	return NULL;
 }
 
-static char* http_parse_start_line(char* start, http_start_line_t* line) 
+static char* http_parse_start_line(char* start, http_request_t* req) 
 {
-		enum start_line_machine_state { PARSING_METHOD, FIRST_WHITESPACE, PARSING_TARGET, SECOND_WHITESPACE, PARSING_VERSION, CRLF };
+	enum start_line_machine_state { PARSING_METHOD, FIRST_WHITESPACE, PARSING_TARGET, SECOND_WHITESPACE, PARSING_VERSION, CRLF };
 	enum start_line_machine_state state = PARSING_METHOD;
 
 	char* it = start;
 	while (*it) {
 		switch (state) {
 			case PARSING_METHOD:
-				it = http_parse_method(it, line->method);
+				it = http_parse_method(it, req->method);
 				if (!it) return NULL;
 				state++;
 				break;
@@ -199,7 +219,7 @@ static char* http_parse_start_line(char* start, http_start_line_t* line)
 				break;
 
 			case PARSING_TARGET:
-				it = http_parse_target(it, line->target);
+				it = http_parse_target(it, req->target);
 				if (!it) return NULL;
 				state++;
 				break;
@@ -213,7 +233,7 @@ static char* http_parse_start_line(char* start, http_start_line_t* line)
 				break;
 
 			case PARSING_VERSION:
-				it = http_parse_version(it, &line->major_version, &line->minor_version);
+				it = http_parse_version(it, &req->major_version, &req->minor_version);
 				if (!it) return NULL;
 				state++;
 				break;
@@ -234,10 +254,172 @@ PARSE_LINE_END:
 	return it;
 }
 
+static char* http_parse_ows(char* start)
+{
+	char* it = start;
+	while (*it && http_is_whitespace(*it)) it++;
+	return it;
+}
+
+static char* http_parse_header_value(char* start, char** value, size_t* len) 
+{
+	*value = NULL;
+	*len = 0;
+
+	uint8_t parsing_lf = 0;
+	char* it = start;
+	while (*it) {
+		if (parsing_lf) {
+			if (*it == '\n') {
+				it++;
+				goto PARSE_HEADER_VALUE_END;
+			}
+			else {
+				last_parser_error = HTTP_CRLF_EXPECTED;
+				return NULL;
+			}
+		}
+		else {
+			if (*it == '\r') parsing_lf = 1;
+			else if (!http_is_vchar(*it) && !http_is_obs_data(*it)) {
+				last_parser_error = HTTP_INVALID_HEADER_BYTE;
+				return NULL;
+			}
+			it++;
+		}
+	}
+
+	last_parser_error = HTTP_END_OF_CONTENT;
+	return NULL;
+
+PARSE_HEADER_VALUE_END:
+	*len = it - start - 2;
+	*value = malloc(*len + 1);
+	memcpy(*value, start, *len);
+	(*value)[*len] = '\0';
+	return it;
+}
+
+static char* http_parse_header(char* start, hashtable_t* headers)
+{
+	enum header_machine_state { PARSING_NAME, PARSING_COLON, PARSING_OWS, PARSING_VALUE };
+	enum header_machine_state state = PARSING_NAME;
+
+	char* header_name = NULL;
+	size_t header_name_len;
+	char* header_value = NULL;
+	size_t header_value_len;
+
+	char* it = start;
+	while (*it) {
+		switch (state) {
+			case PARSING_NAME:
+				it = http_parse_token(it, &header_name, &header_name_len);
+				if (!it) {
+					last_parser_error = HTTP_HEADER_EXPECTED;
+					return NULL;
+				}
+				state++;
+				break;
+
+			case PARSING_COLON:
+				if (*it++ != ':') {
+					free(header_name);
+					last_parser_error = HTTP_COLON_EXPECTED;
+					return NULL;
+				}
+				state++;
+				break;
+
+			case PARSING_OWS:
+				it = http_parse_ows(it);
+				state++;
+				break;
+
+			case PARSING_VALUE:
+				it = http_parse_header_value(it, &header_value, &header_value_len); 
+				if (!it) {
+					free(header_name);
+					last_parser_error = HTTP_HEADER_VALUE_EXPECTED;
+					return NULL;
+				}
+				cup_to_upper(header_name);
+				hashtable_set(headers, header_name, header_value, header_value_len + 1);
+				goto PARSE_HEADER_END;
+		}
+	}
+
+	if (header_name) free(header_name);
+	last_parser_error = HTTP_END_OF_CONTENT;
+	return NULL;
+
+PARSE_HEADER_END:
+	return it;
+}
+
+
+static char* http_parse_headers(char* start, http_request_t* req)
+{
+	req->headers = hashtable_alloc();
+	uint8_t parsing_lf = 0;
+	char* it = start;
+	while (*it) {
+		if (parsing_lf) {
+			if (*it == '\n') {
+				it++;
+				goto PARSE_HEADERS_END;
+			}
+			else {
+				hashtable_free(req->headers); // THIS MAY LEAK MEMORY
+				last_parser_error = HTTP_CRLF_EXPECTED;
+				return NULL;
+			}
+		}
+		else if (*it == '\r') {
+				parsing_lf = 1;
+				it++;
+		}
+		else {
+			it = http_parse_header(it, req->headers);
+			if (!it) {
+				hashtable_free(req->headers); // THIS LEAKS MEMORY!
+				last_parser_error = HTTP_HEADER_EXPECTED;
+				return NULL;
+			}
+		}
+	}
+
+	hashtable_free(req->headers); // THIS MAY LEAK MEMORY
+	last_parser_error = HTTP_END_OF_CONTENT;
+	return NULL;
+
+PARSE_HEADERS_END:
+	return it;
+}
+
+char* http_parse_body(char* start, http_request_t* req)
+{
+	char* body_len_str = hashtable_get(req->headers, "CONTENT-LENGTH");
+	if (!body_len_str || !strcmp(body_len_str, "0")) return start;
+
+	size_t body_len = atoi(body_len_str);
+	if (!body_len) {
+		last_parser_error = HTTP_INVALID_BODY_LENGTH;
+		return NULL;
+	}
+
+	// THIS MAY SEGFAULT - INCOMPLETE BODY
+	req->body_len = body_len;
+	req->body = malloc(body_len);
+	memcpy(req->body, start, body_len);
+	return start + body_len;
+}
+
 char* http_parse_request(char* buffer, size_t len)
 {
-	char met[256];
-	http_start_line_t line;
-	return http_parse_start_line(buffer, &line);
+	http_request_t req;
+	buffer = http_parse_start_line(buffer, &req);
+	if (buffer) buffer = http_parse_headers(buffer, &req);
+	if (buffer) buffer = http_parse_body(buffer, &req);
 	return buffer;
 }
