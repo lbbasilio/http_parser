@@ -4,7 +4,12 @@
 #include <string.h>
 
 #include "http_parser.h"
-#include "cup/strutils/strutils.h"
+
+#define CUP_STRUTILS_IMPLEMENTATION
+#include "strutils.h"
+
+#define CUP_HASHTABLE_IMPLEMENTATION
+#include "hashtable.h"
 
 #define HTTP_SUCCESS				0x0
 #define HTTP_EMPTY_TOKEN			0x1

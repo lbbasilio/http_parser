@@ -2,8 +2,7 @@
 #define HTTP_PARSER_H
 
 #include <stdint.h>
-#include "cup/hashtable/hashtable.h"
-
+#include "hashtable.h"
 
 typedef struct 
 {
