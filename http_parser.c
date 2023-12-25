@@ -420,11 +420,11 @@ char* http_parse_body(char* start, http_request_t* req)
 	return start + body_len;
 }
 
-char* http_parse_request(char* buffer, size_t len)
+http_request_t* http_parse_request(char* buffer, size_t len)
 {
-	http_request_t req;
-	buffer = http_parse_start_line(buffer, &req);
-	if (buffer) buffer = http_parse_headers(buffer, &req);
-	if (buffer) buffer = http_parse_body(buffer, &req);
-	return buffer;
+	http_request_t* req = malloc(sizeof(http_request_t));
+	buffer = http_parse_start_line(buffer, req);
+	if (buffer) buffer = http_parse_headers(buffer, req);
+	if (buffer) buffer = http_parse_body(buffer, req);
+	return req;
 }
