@@ -166,29 +166,29 @@ static char* http_parse_target(char* start, char target[256])
 static char* http_parse_version(char* start, uint8_t* major, uint8_t* minor)
 {
 	char* it = start;
-	if (*it++ != 'H' || !it ||
-		*it++ != 'T' || !it ||
-		*it++ != 'T' || !it ||
-		*it++ != 'P' || !it) 
+	if (strncmp(it, "HTTP", 4) != 0)
 		goto PARSE_VERSION_ERROR;
 
-	char major_str[4];
+	it += 5;
 	char* new_start = it;
 	while (*it && http_is_digit(*it)) ++it;
 
+	char major_str[4];
 	size_t len = it - new_start;
 	if (!len || len >= sizeof(major_str)) goto PARSE_VERSION_ERROR;
+
 	memcpy(major_str, new_start, len); 
 	major_str[len] = '\0';
 
 	if (*it++ != '.') goto PARSE_VERSION_ERROR;
 
-	char minor_str[4];
 	new_start = it;
 	while (*it && http_is_digit(*it)) ++it;
 
+	char minor_str[4];
 	len = it - new_start;
 	if (!len || len >= sizeof(minor_str)) goto PARSE_VERSION_ERROR;
+
 	memcpy(minor_str, new_start, len); 
 	minor_str[len] = '\0';
 
