@@ -3,16 +3,23 @@
 
 #include "http_parser.h"
 
+#define ARENA_IMPLEMENTATION
+#include "arena.h"
+
 void test_http_parser(char* buffer)
 {
-	if (!http_parse_request(buffer, strlen(buffer))) {
+	Http_Request req = {0};
+	Arena arena = arena_create(0x10000);
+	uint8_t status = http_parse_request(buffer, strlen(buffer), &req, &arena);
+	if (status) {
 		char error[50];
-			http_get_last_error_str(error, sizeof(error));
-		printf("HTTP error %d: %s\n", http_get_last_error(), error);
+		http_get_error_str(status, error, sizeof(error));
+		printf("HTTP error %d: %s\n", status, error);
 	}
 	else {
 		printf("Success!\n");
 	}
+	arena_destroy(&arena);
 }
 
 int main()
@@ -37,7 +44,7 @@ int main()
 	//test_http_parser("GET /hello.txt HTTP1.1\r\nHost: localhost;\r\nUser-Agent: FakeFox\r\n");
 	//test_http_parser("GET /hello.txt HTTP1.1\r\nHost: localhost;\r\nUser-Agent: FakeFox\r\n\r\n");
 	//test_http_parser("GET /hello.txt HTTP1.1\r\nHost: localhost;\r\nUser-Agent: FakeFox\r\nHello body!");
-	test_http_parser("GET /hello.txt HTTP1.1\r\nHost: localhost;\r\nUser-Agent: FakeFox\r\nContent-Length: 12\r\n\r\nHello world!");
+	test_http_parser("GET /hello.txt HTTP/1.1\r\nHost: localhost;\r\nUser-Agent: FakeFox\r\nContent-Length: 12\r\n\r\nHello world!");
 
 	return 0;
 }
