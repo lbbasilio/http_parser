@@ -72,12 +72,7 @@ static uint8_t http_is_uri_char(const char c)
 
 static uint8_t http_is_vchar(const char c)
 { 
-	return 0x20 < c && c < 0x7F;
-}
-
-static uint8_t http_is_obs_data(const char c)
-{
-	return c >= 0x80;
+	return (0x20 <= c && c < 0x7F) || c == 0x09;
 }
 
 static uint8_t http_parse_token(char** ptr, char** tok, size_t* len, Arena* arena)
@@ -263,7 +258,7 @@ static uint8_t http_parse_header_value(char** ptr, char** value, size_t* len, Ar
 		else {
 			if (*it == '\r') 
 				parsing_lf = 1;
-			else if (!http_is_vchar(*it) && !http_is_obs_data(*it))
+			else if (!http_is_vchar(*it))
 				return HTTP_INVALID_HEADER_BYTE;
 			it++;
 		}
